@@ -158,6 +158,13 @@ async function processInvoice(orderData) {
   }
 }
 
+// Keep-alive ping (only on Render free plan)
+setInterval(() => {
+  const url = process.env.RENDER_URL || '';
+  if (url) require('https').get(url);
+}, 10 * 60 * 1000); // every 10 minutes
+
+
 // ═══════════════════════════════════════════════════
 //  START SERVER
 // ═══════════════════════════════════════════════════
