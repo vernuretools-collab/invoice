@@ -168,8 +168,8 @@ setInterval(() => {
 // ═══════════════════════════════════════════════════
 //  START SERVER
 // ═══════════════════════════════════════════════════
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
-  console.log(`\n🚀 Server running on port ${PORT}`);
-  console.log(`📬 Webhook URL: https://pannal.invoice.com/razorpay-webhook`);
-});
+  console.log(`\n Server running on port ${PORT}`);
+  console.log(` Webhook URL: https://paanal-farms.onrender.com/razorpay-webhook`);
+})
