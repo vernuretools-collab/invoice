@@ -1,16 +1,17 @@
 const axios = require('axios');
 
 async function sendInvoiceOnWhatsApp(phone, pdfUrl, customerName, orderId) {
-  const url = `https://graph.facebook.com/v21.0/${process.env.HALOSENDER_PHONE_NUMBER_ID}/messages`;
+  const url = `https://partners.halosender.com/v1/message/send-message?token=${process.env.HALOSENDER_API_KEY}`;
 
   const payload = {
-    messaging_product: "whatsapp",
-    recipient_type:    "individual",
-    to:                phone,
-    type:              "template",
+    to:   phone,        // e.g. 919876543210
+    type: "template",
     template: {
-      name:     "invoice_after_payment",
-      language: { code: "en" },
+      language: {
+        policy: "deterministic",
+        code:   "en"
+      },
+      name: "invoice_after_payment",   // your template name
       components: [
         {
           type: "header",
@@ -36,13 +37,10 @@ async function sendInvoiceOnWhatsApp(phone, pdfUrl, customerName, orderId) {
   };
 
   const response = await axios.post(url, payload, {
-    headers: {
-      'Authorization': `Bearer ${process.env.HALOSENDER_API_KEY}`,
-      'Content-Type':  'application/json'
-    }
+    headers: { 'Content-Type': 'application/json' }
   });
 
-  console.log(`📲 WhatsApp sent to: ${phone}`);
+  console.log(`📲 WhatsApp sent to: ${phone} →`, response.data);
   return response.data;
 }
 
