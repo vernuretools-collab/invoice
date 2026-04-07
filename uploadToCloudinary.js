@@ -11,7 +11,9 @@ async function uploadPDFToCloudinary(filePath, orderId) {
     resource_type: 'raw',
     folder:        'invoices',
     public_id:     `INV-${orderId}`,
-    format:        'pdf'
+    format:        'pdf',
+    access_mode:   'public',   // ✅ Makes PDF publicly accessible
+    type:          'upload'    // ✅ Ensures it's a public upload
   });
 
   console.log(`📁 PDF uploaded: ${result.secure_url}`);

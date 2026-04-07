@@ -111,10 +111,10 @@ function generateInvoicePDF(orderData) {
 
       // Business name
       doc.fillColor('white').fontSize(17).font('Helvetica-Bold')
-         .text('KITCHEN FRESH', 0, top + 10, { align: 'center', width: PAGE_W });
+         .text('paanalfarms', 0, top + 10, { align: 'center', width: PAGE_W });
 
       doc.fillColor('#c8e6c9').fontSize(8.5).font('Helvetica')
-         .text('Fresh Kitchen Products', 0, top + 31, { align: 'center', width: PAGE_W });
+         .text('paanalfarms', 0, top + 31, { align: 'center', width: PAGE_W });
 
       // Invoice meta (right side)
       doc.fillColor('white').fontSize(7.5).font('Helvetica')
@@ -133,7 +133,7 @@ function generateInvoicePDF(orderData) {
       doc.fillColor('#2e7d32').fontSize(7.5).font('Helvetica-Bold')
          .text('FROM', MARGIN, startY);
       doc.fillColor('#1a1a1a').fontSize(10).font('Helvetica-Bold')
-         .text('Kitchen Fresh Store', MARGIN, startY + 12);
+         .text('paanalfarms', MARGIN, startY + 12);
       doc.fillColor('#555555').fontSize(7.5).font('Helvetica')
          .text('GSTIN: 33AAAAA0000A1Z5',        MARGIN, startY + 24)
          .text('Chennai, Tamil Nadu - 600001',   MARGIN, startY + 34)
