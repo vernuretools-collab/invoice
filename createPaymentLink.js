@@ -6,6 +6,8 @@ const razorpay = new Razorpay({
 });
 
 async function createPaymentLink(customerData) {
+  const items = customerData.items || [];
+
   const paymentLink = await razorpay.paymentLink.create({
     amount:      customerData.amount,
     currency:    'INR',
@@ -20,9 +22,11 @@ async function createPaymentLink(customerData) {
       email: false
     },
     notes: {
-      name:  customerData.name,
-      phone: customerData.phone,        // ← WhatsApp number stored here
-      items: JSON.stringify(customerData.items || [])
+      name:         customerData.name,
+      phone:        customerData.phone,
+      source:       'react_app',
+      product_name: items.length > 0 ? items[0].name : (customerData.description || 'PaanalFarms Order'),
+      items:        JSON.stringify(items)
     },
     reminder_enable: false
   });

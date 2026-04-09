@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const crypto  = require('crypto');
+const https   = require('https');
+
 const { generateInvoicePDF }    = require('./generateInvoice');
 const { uploadPDFToCloudinary } = require('./uploadToCloudinary');
 const { sendInvoiceOnWhatsApp } = require('./sendWhatsApp');
@@ -12,7 +14,7 @@ const app = express();
 //  HEALTH CHECK
 // ═══════════════════════════════════════════════════
 app.get('/', (req, res) => {
-  res.send('✅ Kitchen Fresh Invoice Server is running!');
+  res.send('✅ PaanalFarms Invoice Server is running!');
 });
 
 // ═══════════════════════════════════════════════════
@@ -20,8 +22,8 @@ app.get('/', (req, res) => {
 // ═══════════════════════════════════════════════════
 app.post('/razorpay-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
-    const webhookSecret       = process.env.RAZORPAY_WEBHOOK_SECRET;
-    const receivedSignature   = req.headers['x-razorpay-signature'];
+    const webhookSecret     = process.env.RAZORPAY_WEBHOOK_SECRET;
+    const receivedSignature = req.headers['x-razorpay-signature'];
 
     const expectedSignature = crypto
       .createHmac('sha256', webhookSecret)
@@ -41,31 +43,62 @@ app.post('/razorpay-webhook', express.raw({ type: 'application/json' }), async (
 
     const payment = payload.payload.payment.entity;
 
+    // ── Debug log (remove after testing) ──────────────
+    console.log('📦 notes.items raw  :', payment.notes?.items);
+    console.log('📦 product_name note:', payment.notes?.product_name);
+    console.log('📦 description      :', payment.description);
+    console.log('📦 source           :', payment.notes?.source || 'razorpay_dashboard');
+    // ──────────────────────────────────────────────────
+
+    // ── Parse items safely ────────────────────────────
     let items = [];
     try {
-      items = JSON.parse(payment.notes?.items || '[]');
+      const parsed = JSON.parse(payment.notes?.items || '[]');
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        items = parsed;
+      } else {
+        // Empty array or missing → build from description/product_name
+        items = [{
+          name:      payment.notes?.product_name
+                     || payment.description
+                     || 'PaanalFarms Order',
+          qty:       1,
+          unitPrice: payment.amount / 100,
+          total:     payment.amount / 100
+        }];
+      }
     } catch {
       items = [{
-        name:      payment.description || 'Product',
+        name:      payment.notes?.product_name
+                   || payment.description
+                   || 'PaanalFarms Order',
         qty:       1,
         unitPrice: payment.amount / 100,
         total:     payment.amount / 100
       }];
     }
 
+    console.log('📦 items final:', JSON.stringify(items));
+    // ──────────────────────────────────────────────────
+
     const rawPhone  = payment.notes?.phone || payment.contact || '';
     const orderData = {
-      orderId:      payment.order_id || payment.id,
+      orderId:      String(payment.order_id || payment.id),
       paymentId:    payment.id,
       customerName: payment.notes?.name || 'Valued Customer',
       phone:        rawPhone.replace(/[^0-9]/g, ''),
       email:        payment.email || 'N/A',
       amount:       payment.amount,
-      description:  payment.description || 'Kitchen Fresh Order',
-      items:        items
+      description:  payment.description || 'PaanalFarms Order',
+      source:       payment.notes?.source || 'razorpay_dashboard',
+      items
     };
 
-    console.log(`\n🔔 Payment Captured! ${orderData.customerName} (${orderData.phone}) Rs.${orderData.amount / 100}`);
+    console.log(`\n🔔 Payment Captured!`);
+    console.log(`👤 Name   : ${orderData.customerName}`);
+    console.log(`📱 Phone  : ${orderData.phone}`);
+    console.log(`💰 Amount : ₹${orderData.amount / 100}`);
+    console.log(`📦 Source : ${orderData.source}`);
 
     // Respond immediately, process async
     res.status(200).json({ status: 'received' });
@@ -89,9 +122,9 @@ app.post('/halosender-webhook', (req, res) => {
   const body = req.body;
 
   if (body.object === 'whatsapp_business_account') {
-    const changes     = body.entry?.[0]?.changes?.[0]?.value;
-    const contacts    = changes?.contacts?.[0];
-    const message     = changes?.messages?.[0];
+    const changes  = body.entry?.[0]?.changes?.[0]?.value;
+    const contacts = changes?.contacts?.[0];
+    const message  = changes?.messages?.[0];
 
     if (message) {
       console.log(`\n📩 Incoming WhatsApp Message`);
@@ -111,13 +144,33 @@ app.post('/create-payment-link', async (req, res) => {
   const { name, phone, email, amount, description, items } = req.body;
 
   if (!name || !phone || !amount) {
-    return res.status(400).json({ success: false, error: 'name, phone and amount are required' });
+    return res.status(400).json({
+      success: false,
+      error: 'name, phone and amount are required'
+    });
+  }
+
+  // Validate items if provided
+  if (items && !Array.isArray(items)) {
+    return res.status(400).json({
+      success: false,
+      error: 'items must be an array'
+    });
   }
 
   try {
-    const paymentUrl = await createPaymentLink({ name, phone, email, amount, description, items });
+    const paymentUrl = await createPaymentLink({
+      name,
+      phone,
+      email,
+      amount,
+      description,
+      items: items || []
+    });
+
     console.log(`🔗 Payment link created for ${name} (${phone})`);
     res.json({ success: true, payment_url: paymentUrl });
+
   } catch (err) {
     console.error('❌ Payment link error:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -129,12 +182,25 @@ app.post('/create-payment-link', async (req, res) => {
 // ═══════════════════════════════════════════════════
 async function processInvoice(orderData) {
   try {
+    console.log(`\n⚙️  Processing invoice: ${orderData.orderId}`);
+
     const pdfPath = await generateInvoicePDF(orderData);
-    const pdfUrl  = await uploadPDFToCloudinary(pdfPath, orderData.orderId);
-    await sendInvoiceOnWhatsApp(orderData.phone, pdfUrl, orderData.customerName, orderData.orderId);
+    console.log(`📄 PDF generated: ${pdfPath}`);
+
+    const pdfUrl = await uploadPDFToCloudinary(pdfPath, orderData.orderId);
+    console.log(`☁️  PDF uploaded: ${pdfUrl}`);
+
+    await sendInvoiceOnWhatsApp(
+      orderData.phone,
+      pdfUrl,
+      orderData.customerName,
+      orderData.orderId
+    );
+
     console.log(`✅ Invoice completed: ${orderData.orderId}`);
+
   } catch (err) {
-    console.error(`❌ Invoice failed [${orderData.orderId}]:`, err.message);
+    console.error(`❌ Invoice failed [${orderData.orderId}]: ${err.message}`);
   }
 }
 
@@ -143,7 +209,7 @@ async function processInvoice(orderData) {
 // ═══════════════════════════════════════════════════
 setInterval(() => {
   const url = process.env.RENDER_URL || '';
-  if (url) require('https').get(url);
+  if (url) https.get(url);
 }, 10 * 60 * 1000);
 
 // ═══════════════════════════════════════════════════
@@ -152,5 +218,6 @@ setInterval(() => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n🚀 Server running on port ${PORT}`);
-  console.log(`📬 Webhook: https://paanal-farms.onrender.com/razorpay-webhook`);
+  console.log(`📬 Webhook : https://paanal-farms.onrender.com/razorpay-webhook`);
+  console.log(`🔗 API     : https://paanal-farms.onrender.com/create-payment-link`);
 });

@@ -29,12 +29,19 @@ async function sendInvoiceOnWhatsApp(phone, pdfUrl, customerName, orderId) {
     }
   };
 
-  const response = await axios.post(url, payload, {
-    headers: { 'Content-Type': 'application/json' }
-  });
-
-  console.log(`📲 WhatsApp sent to: ${phone} →`, response.data);
-  return response.data;
+  try {
+    const response = await axios.post(url, payload, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    console.log(`📲 WhatsApp sent to: ${phone} →`, response.data);
+    return response.data;
+  } catch (err) {
+    // ← Shows exact WhatsApp error reason
+    console.error('❌ WhatsApp Error Details:');
+    console.error('Status :', err.response?.status);
+    console.error('Message:', JSON.stringify(err.response?.data, null, 2));
+    throw new Error(err.response?.data?.error?.message || err.message);
+  }
 }
 
 module.exports = { sendInvoiceOnWhatsApp };

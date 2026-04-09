@@ -10,7 +10,7 @@ function generateInvoicePDF(orderData) {
       margin:        0,
       autoFirstPage: false,
       bufferPages:   true,
-      size:          'LETTER'
+      size:          'A4'
     });
 
     const filename   = `invoice_${orderData.orderId}.pdf`;
@@ -19,21 +19,17 @@ function generateInvoicePDF(orderData) {
     doc.pipe(stream);
 
     // ═══════════════════════════════════════════
-    //  PAGE LAYOUT CONSTANTS
+    //  PAGE CONSTANTS
     // ═══════════════════════════════════════════
-    const PAGE_W        = 612;
-    const PAGE_H        = 792;
-    const MARGIN        = 30;
-    const HEADER_H      = 55;   // top green bar
-    const FROM_BILL_H   = 70;   // FROM / BILL TO section
-    const TABLE_HDR_H   = 22;   // column header row
-    const FOOTER_H      = 42;   // bottom green bar
-    const SUMMARY_H     = 145;  // GST + total + payment + thank you
-    const CONTINUED_H   = 22;   // "continued" label on page 2+
-    const GAP           = 10;   // small spacing between sections
-    const MIN_ROW_H     = 14;   // minimum row height (very small font)
-    const MAX_ROW_H     = 24;   // maximum row height (comfortable reading)
+    const PAGE_W = 595;
+    const PAGE_H = 842;
+    const ML     = 28;       // left margin
+    const MR     = 28;       // right margin
+    const CW     = PAGE_W - ML - MR;  // 539
 
+    // ═══════════════════════════════════════════
+    //  ITEMS
+    // ═══════════════════════════════════════════
     const items = orderData.items && orderData.items.length > 0
       ? orderData.items
       : [{
@@ -44,292 +40,315 @@ function generateInvoicePDF(orderData) {
         }];
 
     // ═══════════════════════════════════════════
-    //  CALCULATE HOW MANY ITEMS FIT PER PAGE
+    //  COLUMN X POSITIONS  (matching image exactly)
+    //  Sno | Name of Product | Item Col | Qty | Rate | MRP | Disc | Disc.Rate | Amount
     // ═══════════════════════════════════════════
+    const C = {
+      sno:      { x: ML,        w: 28  },
+      name:     { x: ML+28,     w: 160 },
+      itemcol:  { x: ML+188,    w: 52  },
+      qty:      { x: ML+240,    w: 36  },
+      rate:     { x: ML+276,    w: 52  },
+      mrp:      { x: ML+328,    w: 52  },
+      disc:     { x: ML+380,    w: 40  },
+      discrate: { x: ML+420,    w: 52  },
+      amount:   { x: ML+472,    w: CW-472 }
+    };
+    const TABLE_RIGHT = ML + CW;
 
-    // Space available for rows on page 1
-    const usedP1    = HEADER_H + GAP + FROM_BILL_H + GAP + TABLE_HDR_H + SUMMARY_H + FOOTER_H + GAP;
-    const availP1   = PAGE_H - usedP1;
+    // ═══════════════════════════════════════════
+    //  CALCULATIONS
+    // ═══════════════════════════════════════════
+    const grossAmount = items.reduce((s, it) => s + Number(it.total || 0), 0);
+    const discount2   = Number(orderData.discount2 || 0);
+    const netAmount   = grossAmount - discount2;
 
-    // Space available for rows on page 2+
-    const usedP2    = HEADER_H + GAP + CONTINUED_H + TABLE_HDR_H + SUMMARY_H + FOOTER_H + GAP;
-    const availP2   = PAGE_H - usedP2;
+    function amountInWords(n) {
+      const ones = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine',
+                    'Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen',
+                    'Seventeen','Eighteen','Nineteen'];
+      const tens = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+      const num  = Math.floor(n);
+      if (num === 0) return 'Zero';
+      if (num < 20)  return ones[num];
+      if (num < 100) return tens[Math.floor(num/10)] + (num%10 ? ' '+ones[num%10] : '');
+      if (num < 1000) return ones[Math.floor(num/100)]+' Hundred'+(num%100 ? ' '+amountInWords(num%100) : '');
+      if (num < 100000) return amountInWords(Math.floor(num/1000))+' Thousand'+(num%1000 ? ' '+amountInWords(num%1000) : '');
+      if (num < 10000000) return amountInWords(Math.floor(num/100000))+' Lakh'+(num%100000 ? ' '+amountInWords(num%100000) : '');
+      return amountInWords(Math.floor(num/10000000))+' Crore'+(num%10000000 ? ' '+amountInWords(num%10000000) : '');
+    }
+    const wordsStr = amountInWords(netAmount) + ' Only';
 
-    // Calculate row height that fills page 1 perfectly
-    function getRowHeight(numRows, availSpace) {
-      const rh = availSpace / numRows;
-      // clamp between min and max
-      return Math.min(MAX_ROW_H, Math.max(MIN_ROW_H, rh));
+    // ═══════════════════════════════════════════
+    //  DRAWING HELPERS
+    // ═══════════════════════════════════════════
+    function hline(x1, x2, y, lw) {
+      doc.moveTo(x1, y).lineTo(x2, y).lineWidth(lw || 0.5).strokeColor('#000').stroke();
+    }
+    function vline(x, y1, y2, lw) {
+      doc.moveTo(x, y1).lineTo(x, y2).lineWidth(lw || 0.5).strokeColor('#000').stroke();
+    }
+    function box(x, y, w, h, lw) {
+      doc.rect(x, y, w, h).lineWidth(lw || 0.5).strokeColor('#000').stroke();
+    }
+    // Draw all column vertical dividers for a row band
+    function colDividers(y1, y2) {
+      Object.values(C).forEach(c => vline(c.x, y1, y2, 0.4));
+      vline(TABLE_RIGHT, y1, y2, 0.5);
+    }
+    // Cell text helper
+    function cell(text, col, y, opts) {
+      const align = opts?.align || 'center';
+      const pad   = opts?.pad   || 3;
+      doc.text(String(text || ''), col.x + pad, y, { width: col.w - pad*2, align });
     }
 
-    // Calculate how many rows fit in available space at a given row height
-    function rowsFit(availSpace, rowH) {
-      return Math.floor(availSpace / rowH);
-    }
+    // ═══════════════════════════════════════════
+    //  PAGING
+    // ═══════════════════════════════════════════
+    const ROW_H      = 16;
+    const HDR_H      = 108;   // header block height
+    const BILLEDTO_H = 58;
+    const TBLHDR_H   = 16;
+    const SUMMARY_H  = 130;
+    const FOOTER_H   = 45;
+    const AVAIL_P1   = PAGE_H - HDR_H - BILLEDTO_H - TBLHDR_H - SUMMARY_H - FOOTER_H - 10;
+    const AVAIL_PN   = PAGE_H - 40 - TBLHDR_H - SUMMARY_H - FOOTER_H - 10;
+    const ROWS_P1    = Math.floor(AVAIL_P1 / ROW_H);
+    const ROWS_PN    = Math.floor(AVAIL_PN / ROW_H);
 
-    // ── Split items into pages ────────────────
-    // Try fitting all items on page 1 first
-    const rhP1All = getRowHeight(items.length, availP1);
-    const pages   = [];
-
-    if (rhP1All >= MIN_ROW_H && items.length <= rowsFit(availP1, MIN_ROW_H)) {
-      // All items fit on page 1
-      pages.push({ items: items, isFirst: true });
-    } else {
-      // Need multiple pages
-      let remaining = [...items];
-      let pageNum   = 0;
-
-      while (remaining.length > 0) {
-        const availSpace = pageNum === 0 ? availP1 : availP2;
-        const rh         = MAX_ROW_H;
-        const maxRows    = rowsFit(availSpace, rh);
-        const chunk      = remaining.splice(0, maxRows);
-        pages.push({ items: chunk, isFirst: pageNum === 0 });
-        pageNum++;
-      }
-    }
-
+    const pages = [];
+    let rem = [...items];
+    pages.push({ items: rem.splice(0, ROWS_P1), isFirst: true });
+    while (rem.length > 0) pages.push({ items: rem.splice(0, ROWS_PN), isFirst: false });
     const totalPages = pages.length;
 
     // ═══════════════════════════════════════════
-    //  GST CALCULATIONS
-    // ═══════════════════════════════════════════
-    const baseAmount = orderData.amount / 100;
-    const cgst       = (baseAmount * 0.025).toFixed(2);
-    const sgst       = (baseAmount * 0.025).toFixed(2);
-    const grandTotal = (baseAmount + parseFloat(cgst) + parseFloat(sgst)).toFixed(2);
-
-    // ═══════════════════════════════════════════
-    //  HELPER: Draw Green Header Bar
-    // ═══════════════════════════════════════════
-    function drawHeader() {
-      const top = PAGE_H - HEADER_H;
-
-      // Green bar
-      doc.rect(0, top, PAGE_W, HEADER_H).fill('#2e7d32');
-
-      // Business name
-      doc.fillColor('white').fontSize(17).font('Helvetica-Bold')
-         .text('paanalfarms', 0, top + 10, { align: 'center', width: PAGE_W });
-
-      doc.fillColor('#c8e6c9').fontSize(8.5).font('Helvetica')
-         .text('paanalfarms', 0, top + 31, { align: 'center', width: PAGE_W });
-
-      // Invoice meta (right side)
-      doc.fillColor('white').fontSize(7.5).font('Helvetica')
-         .text(`INV-${orderData.orderId}`,      MARGIN, top + 10, { align: 'right', width: PAGE_W - MARGIN * 2 })
-         .text(`Date: ${new Date().toLocaleDateString('en-IN', {
-             day: '2-digit', month: 'long', year: 'numeric'
-         })}`,                                  MARGIN, top + 23, { align: 'right', width: PAGE_W - MARGIN * 2 })
-         .text(`Payment ID: ${orderData.paymentId}`, MARGIN, top + 36, { align: 'right', width: PAGE_W - MARGIN * 2 });
-    }
-
-    // ═══════════════════════════════════════════
-    //  HELPER: Draw FROM / BILL TO Section
-    // ═══════════════════════════════════════════
-    function drawFromBillTo(startY) {
-      // FROM
-      doc.fillColor('#2e7d32').fontSize(7.5).font('Helvetica-Bold')
-         .text('FROM', MARGIN, startY);
-      doc.fillColor('#1a1a1a').fontSize(10).font('Helvetica-Bold')
-         .text('paanalfarms', MARGIN, startY + 12);
-      doc.fillColor('#555555').fontSize(7.5).font('Helvetica')
-         .text('GSTIN: 33AAAAA0000A1Z5',        MARGIN, startY + 24)
-         .text('Chennai, Tamil Nadu - 600001',   MARGIN, startY + 34)
-         .text('Phone: +91 98765 43210',         MARGIN, startY + 44)
-         .text('Email: kitchenfresh@gmail.com',  MARGIN, startY + 54);
-
-      // BILL TO
-      const col2 = PAGE_W / 2 + 10;
-      doc.fillColor('#2e7d32').fontSize(7.5).font('Helvetica-Bold')
-         .text('BILL TO', col2, startY);
-      doc.fillColor('#1a1a1a').fontSize(10).font('Helvetica-Bold')
-         .text(orderData.customerName, col2, startY + 12);
-      doc.fillColor('#555555').fontSize(7.5).font('Helvetica')
-         .text(`Phone: +${orderData.phone}`, col2, startY + 24)
-         .text(`Email: ${orderData.email}`,  col2, startY + 34);
-
-      // Divider line
-      const lineY = startY + FROM_BILL_H - 4;
-      doc.moveTo(MARGIN, lineY)
-         .lineTo(PAGE_W - MARGIN, lineY)
-         .lineWidth(1.2).strokeColor('#2e7d32').stroke();
-    }
-
-    // ═══════════════════════════════════════════
-    //  HELPER: Draw Table Column Header
-    // ═══════════════════════════════════════════
-    function drawTableHeader(y) {
-      doc.rect(MARGIN, y - TABLE_HDR_H, PAGE_W - MARGIN * 2, TABLE_HDR_H).fill('#2e7d32');
-      doc.fillColor('white').fontSize(7.5).font('Helvetica-Bold')
-         .text('#',           MARGIN + 5,  y - TABLE_HDR_H + 6)
-         .text('Product Name',MARGIN + 25, y - TABLE_HDR_H + 6, { width: 240 })
-         .text('Qty',         330,         y - TABLE_HDR_H + 6, { width: 50,  align: 'center' })
-         .text('Unit Price',  390,         y - TABLE_HDR_H + 6, { width: 85,  align: 'right' })
-         .text('Total',       490,         y - TABLE_HDR_H + 6, { width: 90,  align: 'right' });
-    }
-
-    // ═══════════════════════════════════════════
-    //  HELPER: Draw Summary (GST + Total)
-    // ═══════════════════════════════════════════
-    function drawSummary(y) {
-      const sumRowH = 22;
-
-      // Horizontal line above summary
-      doc.moveTo(MARGIN, y)
-         .lineTo(PAGE_W - MARGIN, y)
-         .lineWidth(1).strokeColor('#2e7d32').stroke();
-      y -= 4;
-
-      // Summary rows
-      const summaryRows = [
-        { label: 'Subtotal:',    value: `Rs. ${baseAmount.toFixed(2)}`, color: '#444' },
-        { label: 'CGST @ 2.5%:',value: `Rs. ${cgst}`,                  color: '#444' },
-        { label: 'SGST @ 2.5%:',value: `Rs. ${sgst}`,                  color: '#444' },
-        { label: 'Delivery:',    value: 'FREE',                         color: '#2e7d32' },
-      ];
-
-      summaryRows.forEach(row => {
-        doc.fillColor('#444').fontSize(8.5).font('Helvetica')
-           .text(row.label, 370, y - sumRowH + 7, { width: 100, align: 'right' });
-        doc.fillColor(row.color).fontSize(8.5)
-           .text(row.value, 475, y - sumRowH + 7, { width: 105, align: 'right' });
-        y -= sumRowH;
-      });
-
-      // Grand total box (green)
-      doc.moveTo(310, y + 2)
-         .lineTo(PAGE_W - MARGIN, y + 2)
-         .lineWidth(1.2).strokeColor('#2e7d32').stroke();
-
-      doc.rect(310, y - 24, PAGE_W - MARGIN - 310, 24).fill('#2e7d32');
-      doc.fillColor('white').fontSize(9.5).font('Helvetica-Bold')
-         .text('GRAND TOTAL:',   315, y - 18, { width: 155, align: 'right' })
-         .text(`Rs. ${grandTotal}`, 475, y - 18, { width: 105, align: 'right' });
-
-      // Payment received badge
-      doc.rect(MARGIN, y - 24, 230, 24).fill('#e8f5e9');
-      doc.fillColor('#2e7d32').fontSize(9).font('Helvetica-Bold')
-         .text('PAYMENT RECEIVED', MARGIN + 8, y - 17);
-
-      y -= 38;
-
-      // Thank you
-      doc.fillColor('#2e7d32').fontSize(11).font('Helvetica-Bold')
-         .text('Thank you for your order!', 0, y, { align: 'center', width: PAGE_W });
-      doc.fillColor('#666666').fontSize(8).font('Helvetica')
-         .text('Your order will be delivered within 2-3 business days.',
-               0, y + 16, { align: 'center', width: PAGE_W });
-    }
-
-    // ═══════════════════════════════════════════
-    //  HELPER: Draw Footer
-    // ═══════════════════════════════════════════
-    function drawFooter(pageNum) {
-      doc.rect(0, 0, PAGE_W, FOOTER_H - 4).fill('#2e7d32');
-      doc.fillColor('white').fontSize(8).font('Helvetica')
-         .text('Kitchen Fresh  |  kitchenfresh@gmail.com  |  +91 98765 43210',
-               0, 18, { align: 'center', width: PAGE_W });
-      doc.fillColor('#c8e6c9').fontSize(7)
-         .text('This is a computer-generated invoice and does not require a physical signature.',
-               0, 8, { align: 'center', width: PAGE_W });
-      // Page number
-      doc.fillColor('#aaaaaa').fontSize(7)
-         .text(`Page ${pageNum} of ${totalPages}`,
-               0, FOOTER_H + 2, { align: 'right', width: PAGE_W - MARGIN });
-    }
-
-    // ═══════════════════════════════════════════
-    //  RENDER ALL PAGES
+    //  RENDER PAGES
     // ═══════════════════════════════════════════
     pages.forEach((pageData, pgIndex) => {
-      doc.addPage({ size: 'LETTER', margin: 0 });
+      doc.addPage({ size: 'A4', margin: 0 });
 
-      const pageNum    = pgIndex + 1;
-      const isFirst    = pageData.isFirst;
-      const isLast     = pgIndex === pages.length - 1;
-      const pageItems  = pageData.items;
+      const isFirst   = pageData.isFirst;
+      const isLast    = pgIndex === pages.length - 1;
+      const pageNum   = pgIndex + 1;
+      const pageItems = pageData.items;
 
-      // ── Draw Header ─────────────────────────
-      drawHeader();
+      let y = 18;
 
-      // ── Starting Y (top content area) ───────
-      let y = PAGE_H - HEADER_H - GAP;
+      // ── Outer border ───────────────────────
+      box(ML, y, CW, PAGE_H - y - 18, 0.8);
 
-      // ── FROM / BILL TO (page 1 only) ────────
       if (isFirst) {
-        drawFromBillTo(y - FROM_BILL_H + 10);
-        y -= FROM_BILL_H + GAP;
+        // ════════════════════════════════════
+        //  COMPANY HEADER
+        // ════════════════════════════════════
+        doc.fillColor('#000').fontSize(14).font('Helvetica-Bold')
+           .text('PAANAL FARMS F2C', ML, y + 7, { width: CW, align: 'center' });
+
+        doc.fontSize(8).font('Helvetica')
+           .text('No. 55/16 VOC Street,New Lakshmipuram', ML, y + 24, { width: CW, align: 'center' })
+           .text('Kolathur Chennai - 600099',              ML, y + 33, { width: CW, align: 'center' })
+           .text('GSTIN : 33AAYFP3257A1Z7',               ML, y + 42, { width: CW, align: 'center' })
+           .text(`Phone No : ${orderData.phone || ''}`, ML + 5, y + 55,{ width: CW, align: 'center' });
+
+        // Left: Phone + State
+        doc.fontSize(8).font('Helvetica')
+           
+           .text('State : Tamil Nadu',                  ML + 5, y + 65);
+
+        // Center: BILL OF SUPPLY
+        doc.fontSize(9).font('Helvetica-Bold')
+           .text('BILL  OF  SUPPLY', ML, y + 60, { width: CW, align: 'center' });
+
+        // Right: Bill No + Bill Date
+        const billDate = new Date().toLocaleDateString('en-IN', {
+          day: '2-digit', month: '2-digit', year: '2-digit'
+        }) + ', ' + new Date().toLocaleTimeString('en-IN', {
+          hour: '2-digit', minute: '2-digit', hour12: true
+        });
+        const rightX = ML + CW - 200;
+        doc.fontSize(8).font('Helvetica')
+           .text(`Bill No  :  CR${orderData.orderId}`, rightX, y + 55, { width: 195 })
+           .text(`Bill Date : ${billDate}`,             rightX, y + 65, { width: 195 });
+
+        y += HDR_H - 2;
+        hline(ML, ML + CW, y, 0.5);
+
+        // ════════════════════════════════════
+        //  BILLED TO SECTION
+        // ════════════════════════════════════
+        const btY = y;
+        y += 1;
+
+        // "Billed to:" header (full width)
+        doc.fontSize(8).font('Helvetica-Bold')
+           .text('Billed to:', ML + 5, y + 3);
+
+        hline(ML, ML + CW, y + 14, 0.4);
+
+        // Left col: customer details
+        const detY = y + 17;
+        doc.fontSize(8).font('Helvetica')
+           .text('Name',    ML + 5, detY)
+           .text(`:  ${orderData.customerName || ''}`, ML + 55, detY)
+           .text('Address', ML + 5, detY + 11)
+           .text(':  ',     ML + 55, detY + 11)
+           .text('Phone',   ML + 5, detY + 22)
+           .text(`:  ${orderData.phone || ''}`, ML + 55, detY + 22)
+           .text('GSTIN',   ML + 5, detY + 33)
+           .text(':  ',     ML + 55, detY + 33);
+
+        // Right col: Additional Info box
+        const aiX = ML + CW / 2;
+        const aiW = CW / 2;
+        box(aiX, btY + 1, aiW, 14, 0.5);
+        doc.fontSize(8).font('Helvetica-Bold')
+           .text('Additional Info', aiX + 5, btY + 4, { width: aiW - 10 });
+
+        // Invoice type row below Additional Info
+        hline(aiX, ML + CW, btY + 15, 0.4);
+        doc.fontSize(8).font('Helvetica')
+           .text('Invoice type', aiX + 5, detY + 3)
+           .text(':  Credit Bill', aiX + 70, detY + 3);
+
+        // vertical divider between left/right in billed to
+        vline(aiX, btY + 1, btY + BILLEDTO_H, 0.5);
+
+        y = btY + BILLEDTO_H;
+        hline(ML, ML + CW, y, 0.5);
+
       } else {
-        // "Continued" label on page 2+
-        doc.fillColor('#888888').fontSize(8).font('Helvetica')
-           .text(`(Continued from Page ${pageNum - 1})`,
-                 0, y - CONTINUED_H + 5, { align: 'center', width: PAGE_W });
-        y -= CONTINUED_H + GAP;
+        // Continuation
+        doc.fontSize(9).font('Helvetica-Bold')
+           .text('PAANAL FARMS F2C', ML, y + 5, { width: CW, align: 'center' });
+        doc.fontSize(7.5).font('Helvetica')
+           .text(`(Continued — Page ${pageNum} of ${totalPages})`, ML, y + 17, { width: CW, align: 'center' });
+        y += 32;
+        hline(ML, ML + CW, y, 0.5);
       }
 
-      // ── Table Header ─────────────────────────
-      drawTableHeader(y);
-      y -= TABLE_HDR_H;
+      // ════════════════════════════════════
+      //  TABLE HEADER ROW
+      // ════════════════════════════════════
+      const tblHdrY = y;
+      colDividers(tblHdrY, tblHdrY + TBLHDR_H);
+      hline(ML, TABLE_RIGHT, tblHdrY + TBLHDR_H, 0.5);
 
-      // ── Calculate row height for this page ──
-      // Reserve space for summary on last page
-      const reserveForSummary = isLast ? SUMMARY_H : 20;
-      const availForRows      = y - FOOTER_H - reserveForSummary;
-      const rowH = Math.min(MAX_ROW_H, Math.max(MIN_ROW_H,
-                    availForRows / pageItems.length));
+      const thY = tblHdrY + 3;
+      doc.fillColor('#000').fontSize(7.5).font('Helvetica-Bold');
+      cell('Sno',           C.sno,      thY);
+      cell('Name of Product', C.name,   thY, { align: 'left', pad: 4 });
+      cell('Item Col',      C.itemcol,  thY);
+      cell('Qty',           C.qty,      thY);
+      cell('Rate',          C.rate,     thY);
+      cell('MRP',           C.mrp,      thY);
+      cell('Disc',          C.disc,     thY);
+      cell('Disc.Rate',     C.discrate, thY);
+      cell('Amount',        C.amount,   thY);
 
-      // ── Draw Product Rows ────────────────────
-      const rowColors  = ['#f9fbe7', '#ffffff'];
-      const globalStart = pages.slice(0, pgIndex).reduce((sum, p) => sum + p.items.length, 0);
+      y = tblHdrY + TBLHDR_H;
+
+      // ════════════════════════════════════
+      //  TABLE ROWS
+      // ════════════════════════════════════
+      const globalStart = pages.slice(0, pgIndex).reduce((s, p) => s + p.items.length, 0);
 
       pageItems.forEach((item, i) => {
-        const globalIdx = globalStart + i;
-        const bg        = rowColors[globalIdx % 2];
-        const rowY      = y - (i + 1) * rowH;
+        const gi   = globalStart + i;
+        const rowY = y + i * ROW_H;
+        const txY  = rowY + 4;
 
-        doc.rect(MARGIN, rowY, PAGE_W - MARGIN * 2, rowH).fill(bg);
+        colDividers(rowY, rowY + ROW_H);
+        hline(ML, TABLE_RIGHT, rowY + ROW_H, 0.4);
 
-        const textY = rowY + rowH / 2 - 4;
-        doc.fillColor('#333333').fontSize(7).font('Helvetica')
-           .text(String(globalIdx + 1), MARGIN + 5, textY)
-           .text(item.name,             MARGIN + 25, textY, { width: 240 })
-           .text(String(item.qty),      330, textY, { width: 50,  align: 'center' })
-           .text(`Rs. ${Number(item.unitPrice).toFixed(2)}`,
-                                        390, textY, { width: 85,  align: 'right' })
-           .text(`Rs. ${Number(item.total).toFixed(2)}`,
-                                        490, textY, { width: 90,  align: 'right' });
+        const rate     = Number(item.unitPrice || item.rate || 0);
+        const mrp      = Number(item.mrp       || rate);
+        const disc     = Number(item.disc      || 0);
+        const discRate = Number(item.discRate  || 0);
+        const amount   = Number(item.total     || 0);
 
-        // Row divider line
-        doc.moveTo(MARGIN, rowY)
-           .lineTo(PAGE_W - MARGIN, rowY)
-           .lineWidth(0.3).strokeColor('#dddddd').stroke();
+        doc.fillColor('#000').fontSize(7.5).font('Helvetica');
+        cell(gi + 1,                  C.sno,      txY);
+        cell(item.name || '',         C.name,     txY, { align: 'left', pad: 4 });
+        cell(item.itemcol || '',      C.itemcol,  txY);
+        cell(item.qty,                C.qty,      txY);
+        cell(rate.toFixed(2),         C.rate,     txY);
+        cell(mrp.toFixed(2),          C.mrp,      txY);
+        cell(disc.toFixed(2),         C.disc,     txY);
+        cell(discRate.toFixed(2),     C.discrate, txY);
+        cell(amount.toFixed(2),       C.amount,   txY);
       });
 
-      y -= pageItems.length * rowH;
+      y += pageItems.length * ROW_H;
 
-      // ── Summary on Last Page ─────────────────
+      // ════════════════════════════════════
+      //  SUMMARY — last page only
+      // ════════════════════════════════════
       if (isLast) {
-        y -= 6;
-        drawSummary(y);
-      } else {
-        // "Continued" hint
-        doc.fillColor('#aaaaaa').fontSize(7).font('Helvetica')
-           .text('Continued on next page...',
-                 0, FOOTER_H + 10, { align: 'right', width: PAGE_W - MARGIN });
-      }
+        hline(ML, TABLE_RIGHT, y, 0.5);
 
-      // ── Footer ───────────────────────────────
-      drawFooter(pageNum);
+        const sumStartY = y + 5;
+        const splitX    = ML + CW * 0.53;
+        const sumBoxX   = splitX;
+        const sumBoxW   = TABLE_RIGHT - splitX;
+
+        // Amount in Words
+        doc.fontSize(8).font('Helvetica-Bold')
+           .text('Amount in Words', ML + 5, sumStartY);
+        doc.fontSize(8).font('Helvetica')
+           .text(wordsStr, ML + 5, sumStartY + 13, { width: splitX - ML - 10 });
+
+        // Tax note at bottom of left
+        doc.fontSize(7).font('Helvetica')
+           .text('"composition taxable: person not eligible to collect tax on "',
+                 ML + 5, sumStartY + 75, { width: splitX - ML - 10 });
+
+        // Summary box right side
+        const sRows = [
+          { label: 'Gross Amount',     value: grossAmount.toFixed(2), bold: false },
+          { label: 'Transport',        value: '0.00',                 bold: false },
+          { label: 'Discount 1',       value: '0',                    bold: false },
+          { label: 'Discount 2',       value: discount2 ? discount2.toFixed(0) : '0', bold: false },
+          { label: 'Total Dis Amount', value: discount2 ? discount2.toFixed(0) : '0', bold: false },
+          { label: 'Rounded Off',      value: '0.00',                 bold: false },
+          { label: 'Net Amount',       value: netAmount.toFixed(2),   bold: true  },
+        ];
+
+        const sRowH = 15;
+        const boxH  = sRows.length * sRowH + 2;
+        box(sumBoxX, sumStartY - 2, sumBoxW, boxH, 0.5);
+
+        sRows.forEach((row, ri) => {
+          const ry = sumStartY - 2 + ri * sRowH;
+          if (ri > 0) hline(sumBoxX, sumBoxX + sumBoxW, ry, 0.3);
+
+          const font = row.bold ? 'Helvetica-Bold' : 'Helvetica';
+          doc.fontSize(row.bold ? 8.5 : 8).font(font).fillColor('#000')
+             .text(row.label, sumBoxX + 5, ry + 4, { width: sumBoxW * 0.55 })
+             .text(':', sumBoxX + sumBoxW * 0.58, ry + 4)
+             .text(row.value, sumBoxX + sumBoxW * 0.62, ry + 4,
+                   { width: sumBoxW * 0.35, align: 'right' });
+        });
+
+        // Vertical divider between left/right summary
+        vline(splitX, y, y + boxH + 7, 0.5);
+
+        // Authorized Signatory
+        const sigY = PAGE_H - 45;
+        hline(ML, TABLE_RIGHT, sigY, 0.5);
+        doc.fontSize(8).font('Helvetica-Bold')
+           .text('Authorized Signatory', ML + CW - 150, sigY + 10);
+
+      } else {
+        doc.fillColor('#888').fontSize(7).font('Helvetica')
+           .text('Continued on next page...', ML, y + 5, { width: CW, align: 'right' });
+      }
     });
 
-    // ═══════════════════════════════════════════
-    //  FINALIZE
-    // ═══════════════════════════════════════════
     doc.end();
     stream.on('finish', () => {
-      console.log(`✅ Invoice PDF ready: ${outputPath}`);
+      console.log(`✅ PDF ready: ${outputPath}`);
       resolve(outputPath);
     });
     stream.on('error', reject);
